@@ -1,0 +1,70 @@
+{
+  "name": "outocut",
+  "version": "0.2.0",
+  "private": true,
+  "description": "OutoCut - Windows desktop video mixing workspace",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"tsc -p electron/tsconfig.json --watch\" \"wait-on tcp:5173 file:dist-electron/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev:engine": "python -m uvicorn outocut_engine.app:create_app --factory --app-dir engine --host 127.0.0.1 --port 35006",
+    "build": "vue-tsc --noEmit && vite build && node scripts/verify-dist.mjs && node scripts/clean-electron.mjs && tsc -p electron/tsconfig.json",
+    "package:win": "npm run build && electron-builder --win nsis",
+    "test": "vitest run",
+    "test:engine": "python -m pytest engine/tests",
+    "check": "npm run build && npm run test && npm run test:engine"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "element-plus": "^2.11.8",
+    "pinia": "^3.0.3",
+    "vue": "^3.5.22",
+    "vue-router": "^4.6.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "@vue/test-utils": "^2.4.6",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^39.2.4",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2",
+    "vitest": "^4.0.9",
+    "vue-tsc": "^3.1.4",
+    "wait-on": "^9.0.3"
+  },
+  "build": {
+    "appId": "com.outocut.desktop",
+    "productName": "OutoCut",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "engine/dist/outocut-engine",
+        "to": "engine"
+      },
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["ffmpeg.exe", "ffprobe.exe", "LICENSE.txt"]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "OutoCut-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

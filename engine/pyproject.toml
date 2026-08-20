@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "outocut-engine"
+version = "0.2.0"
+description = "Local media engine for OutoCut"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "fastapi>=0.118,<1",
+  "uvicorn[standard]>=0.37,<1",
+  "pydantic>=2.11,<3",
+  "httpx>=0.28,<1",
+  "python-multipart>=0.0.20,<1",
+  "psutil>=7.0,<8",
+  "sherpa-onnx>=1.13,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.2,<2",
+  "ruff>=0.14,<1",
+  "pyinstaller>=6.16,<7"
+]
+
+[project.scripts]
+outocut-engine = "outocut_engine.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["outocut_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

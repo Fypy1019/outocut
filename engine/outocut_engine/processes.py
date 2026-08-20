@@ -1,0 +1,7 @@
+from __future__ import annotations
+
+import subprocess
+
+WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+WINDOWS_BELOW_NORMAL_PRIORITY = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+WINDOWS_FFMPEG_FLAGS = WINDOWS_NO_WINDOW | WINDOWS_BELOW_NORMAL_PRIORITY
