@@ -6,6 +6,8 @@ import JobsView from '@/views/JobsView.vue'
 import ResolutionView from '@/views/ResolutionView.vue'
 import OverlayView from '@/views/OverlayView.vue'
 import RenameView from '@/views/RenameView.vue'
+import QianchuanUploadView from '@/views/QianchuanUploadView.vue'
+import ProductSetView from '@/views/ProductSetView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 
 export const router = createRouter({
@@ -17,7 +19,9 @@ export const router = createRouter({
     { path: '/jobs', component: JobsView, meta: { title: '任务中心' } },
     { path: '/resolutions', component: ResolutionView, meta: { title: '分辨率转换' } },
     { path: '/overlays', component: OverlayView, meta: { title: '水印/贴纸' } },
-    { path: '/settings', component: SettingsView, meta: { title: '系统设置' } },
     { path: '/rename', component: RenameView, meta: { title: '批量重命名' } },
+    { path: '/qianchuan-upload', component: QianchuanUploadView, meta: { title: '千川上传' } },
+    { path: '/product-set', component: ProductSetView, meta: { title: '生成套图' } },
+    { path: '/settings', component: SettingsView, meta: { title: '系统设置' } },
   ],
 })

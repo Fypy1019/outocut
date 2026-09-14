@@ -295,6 +295,11 @@ class FullFrameOverlaySettings(BaseModel):
     opacity: Annotated[float, Field(ge=0.05, le=1)] = 0.5
 
 
+class VideoOverlaySettings(BaseModel):
+    path: str
+    opacity: Annotated[float, Field(ge=0.01, le=1)] = 0.5
+
+
 class StickerOverlaySettings(BaseModel):
     path: str
     opacity: Annotated[float, Field(ge=0.05, le=1)] = 0.8
@@ -311,10 +316,14 @@ class OverlayCompositeRequest(BaseModel):
     watermark: FullFrameOverlaySettings | None = None
     sticker: StickerOverlaySettings | None = None
     pixel: FullFrameOverlaySettings | None = None
+    video_overlay: VideoOverlaySettings | None = None
+    fixed_frame_drop: bool = False
 
     @model_validator(mode="after")
     def require_layer(self) -> OverlayCompositeRequest:
-        if not any((self.watermark, self.sticker, self.pixel)):
+        if not any(
+            (self.watermark, self.sticker, self.pixel, self.video_overlay, self.fixed_frame_drop)
+        ):
             raise ValueError("至少需要开启一种处理方式")
         return self
 
@@ -363,6 +372,9 @@ class ResolutionBatchCreate(BaseModel):
 
 class SecretUpdate(BaseModel):
     bailian_api_key: str | None = None
+    ecom_text_api_key: str | None = None
+    ecom_image_api_key: str | None = None
+    ecom_tavily_api_key: str | None = None
     minimax_api_key: str | None = None
     deepseek_api_key: str | None = None
     douyin_cookie: str | None = None
@@ -388,6 +400,14 @@ class AppSettings(BaseModel):
     default_codec: Literal["libx264", "h264_nvenc"] = "libx264"
     default_quality: Annotated[int, Field(ge=16, le=32)] = 18
     bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    ecom_text_api_mode: Literal["chat-completions", "responses", "claude"] = "chat-completions"
+    ecom_text_base_url: str = "https://api.openai.com/v1"
+    ecom_text_model: str = "gpt-4o"
+    ecom_text_timeout_seconds: Annotated[int, Field(ge=60, le=1800)] = 600
+    ecom_image_api_mode: Literal["images", "responses"] = "images"
+    ecom_image_base_url: str = "https://api.openai.com/v1"
+    ecom_image_model: str = "gpt-image-2"
+    ecom_search_enabled: bool = False
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     deepseek_base_url: str = "https://api.deepseek.com"
     default_model: str = "qwen-plus"

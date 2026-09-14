@@ -1,6 +1,6 @@
 {
   "name": "outocut",
-  "version": "0.2.0",
+  "version": "0.2.6",
   "private": true,
   "description": "OutoCut - Windows desktop video mixing workspace",
   "main": "dist-electron/main.js",
@@ -18,6 +18,7 @@
     "@element-plus/icons-vue": "^2.3.2",
     "element-plus": "^2.11.8",
     "pinia": "^3.0.3",
+    "playwright-core": "^1.62.1",
     "vue": "^3.5.22",
     "vue-router": "^4.6.3"
   },

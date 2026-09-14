@@ -44,7 +44,7 @@ def _raise_for_provider(response: httpx.Response, provider: str) -> dict[str, An
     if response.status_code in {401, 403} or "api key" in lowered or "鉴权" in message:
         raise ProviderError(
             "invalid_api_key",
-            f"{provider} API Key 无效或没有语音接口权限；请确认 MiniMax 区域与 Key 来源一致",
+            f"{provider} API Key 无效、无模型权限、额度已停用或请求地域不匹配",
             401,
         )
     if response.status_code == 429 or "rate" in lowered or "频繁" in message:

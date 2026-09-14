@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "outocut-engine"
-version = "0.2.0"
+version = "0.2.6"
 description = "Local media engine for OutoCut"
 requires-python = ">=3.11,<3.15"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
   "httpx>=0.28,<1",
   "python-multipart>=0.0.20,<1",
   "psutil>=7.0,<8",
+  "Pillow>=11,<13",
   "sherpa-onnx>=1.13,<2",
 ]
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { EditPen, Film, FolderOpened, HomeFilled, Monitor, Picture, Setting, VideoPlay } from '@element-plus/icons-vue'
+import { EditPen, Film, FolderOpened, HomeFilled, MagicStick, Monitor, Picture, Setting, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 
 const route = useRoute()
@@ -26,6 +26,8 @@ onMounted(() => store.refreshHealth())
         <RouterLink to="/resolutions"><el-icon><Monitor /></el-icon><span>分辨率转换</span></RouterLink>
         <RouterLink to="/overlays"><el-icon><Picture /></el-icon><span>水印/贴纸</span></RouterLink>
         <RouterLink to="/rename"><el-icon><EditPen /></el-icon><span>批量重命名</span></RouterLink>
+        <RouterLink to="/qianchuan-upload"><el-icon><UploadFilled /></el-icon><span>千川上传</span></RouterLink>
+        <RouterLink to="/product-set"><el-icon><MagicStick /></el-icon><span>生成套图</span></RouterLink>
         <RouterLink to="/settings"><el-icon><Setting /></el-icon><span>系统设置</span></RouterLink>
       </nav>
       <div class="engine-card" :class="{ offline: !store.online }">
@@ -43,7 +45,7 @@ onMounted(() => store.refreshHealth())
       </header>
       <section class="page-content">
         <RouterView v-slot="{ Component }">
-          <KeepAlive include="OverlayView,ResolutionView">
+          <KeepAlive include="OverlayView,ResolutionView,ProductSetView">
             <component :is="Component" />
           </KeepAlive>
         </RouterView>

@@ -179,6 +179,14 @@ export interface AppSettings {
   default_codec: 'libx264' | 'h264_nvenc'
   default_quality: number
   bailian_base_url: string
+  ecom_text_api_mode: 'chat-completions' | 'responses' | 'claude'
+  ecom_text_base_url: string
+  ecom_text_model: string
+  ecom_text_timeout_seconds: number
+  ecom_image_api_mode: 'images' | 'responses'
+  ecom_image_base_url: string
+  ecom_image_model: string
+  ecom_search_enabled: boolean
   minimax_base_url: string
   deepseek_base_url: string
   default_model: string

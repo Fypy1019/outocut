@@ -19,6 +19,13 @@ from .assets import AssetScanner
 from .config import Settings
 from .db import Database, utc_now
 from .douyin import ASR_AVAILABLE_MODELS, DouyinResolveError, resolve_douyin_voiceover
+from .ecom_design import (
+    EcomCancelRequest,
+    EcomDesignService,
+    EcomImageRequest,
+    EcomSearchRequest,
+    EcomTextRequest,
+)
 from .engine_log import setup_logging
 from .jobs import JobManager
 from .media_batches import MediaBatchManager
@@ -172,6 +179,40 @@ def create_app() -> FastAPI:
             )
         raise KeyError(name)
 
+    def ecom_design_service() -> EcomDesignService:
+        defaults = AppSettings()
+        return EcomDesignService(
+            text_mode=get_setting("ecom_text_api_mode", defaults.ecom_text_api_mode),  # type: ignore[arg-type]
+            text_base_url=get_setting("ecom_text_base_url", defaults.ecom_text_base_url),
+            text_model=get_setting("ecom_text_model", defaults.ecom_text_model),
+            text_api_key=get_secret("ecom_text_api_key"),
+            text_timeout_seconds=int(
+                get_setting("ecom_text_timeout_seconds", str(defaults.ecom_text_timeout_seconds))
+            ),
+            image_mode=get_setting("ecom_image_api_mode", defaults.ecom_image_api_mode),  # type: ignore[arg-type]
+            image_base_url=get_setting("ecom_image_base_url", defaults.ecom_image_base_url),
+            image_model=get_setting("ecom_image_model", defaults.ecom_image_model),
+            image_api_key=get_secret("ecom_image_api_key"),
+            search_enabled=get_setting("ecom_search_enabled", "False").casefold() == "true",
+            tavily_api_key=get_secret("ecom_tavily_api_key"),
+        )
+
+    ecom_active_requests: dict[str, set[asyncio.Task[Any]]] = {}
+
+    async def tracked_ecom_request(workflow_id: str, operation: Any) -> Any:
+        task = asyncio.current_task()
+        if not workflow_id or task is None:
+            return await operation
+        ecom_active_requests.setdefault(workflow_id, set()).add(task)
+        try:
+            return await operation
+        finally:
+            active = ecom_active_requests.get(workflow_id)
+            if active is not None:
+                active.discard(task)
+                if not active:
+                    ecom_active_requests.pop(workflow_id, None)
+
     def saved_voice_profiles() -> dict[str, VoiceProfile]:
         profiles: dict[str, VoiceProfile] = {}
         for row in db.fetch_all("SELECT payload FROM voice_profiles ORDER BY updated_at DESC"):
@@ -319,6 +360,13 @@ def create_app() -> FastAPI:
                 "cache_directory",
                 "asset_root_directory",
                 "bailian_base_url",
+                "ecom_text_api_mode",
+                "ecom_text_base_url",
+                "ecom_text_model",
+                "ecom_image_api_mode",
+                "ecom_image_base_url",
+                "ecom_image_model",
+                "ecom_search_enabled",
                 "minimax_base_url",
                 "deepseek_base_url",
                 "default_model",
@@ -336,12 +384,16 @@ def create_app() -> FastAPI:
             "default_height",
             "default_fps",
             "default_quality",
+            "ecom_text_timeout_seconds",
         ):
             values[field] = int(get_setting(field, str(getattr(defaults, field))))
         values["cache_directory"] = values["cache_directory"] or str(settings.data_root / "cache")
         values["output_directory"] = values["output_directory"] or str(settings.data_root / "exports")
         values["configured"] = {
             "bailian": db.fetch_one("SELECT 1 FROM secrets WHERE key='bailian_api_key'") is not None,
+            "ecom_text": db.fetch_one("SELECT 1 FROM secrets WHERE key='ecom_text_api_key'") is not None,
+            "ecom_image": db.fetch_one("SELECT 1 FROM secrets WHERE key='ecom_image_api_key'") is not None,
+            "ecom_tavily": db.fetch_one("SELECT 1 FROM secrets WHERE key='ecom_tavily_api_key'") is not None,
             "minimax": db.fetch_one("SELECT 1 FROM secrets WHERE key='minimax_api_key'") is not None,
             "deepseek": db.fetch_one("SELECT 1 FROM secrets WHERE key='deepseek_api_key'") is not None,
             "douyin": db.fetch_one("SELECT 1 FROM secrets WHERE key='douyin_cookie'") is not None,
@@ -378,6 +430,37 @@ def create_app() -> FastAPI:
                 (key, protect_secret(value), utc_now()),
             )
         return (await read_settings()).configured
+
+    @app.get("/ecom-design/configuration", dependencies=secured)
+    async def ecom_design_configuration() -> dict[str, Any]:
+        return ecom_design_service().configuration()
+
+    @app.post("/ecom-design/text", dependencies=secured)
+    async def ecom_design_text(payload: EcomTextRequest) -> dict[str, str]:
+        text = await tracked_ecom_request(payload.workflow_id, ecom_design_service().text(payload))
+        return {"text": text}
+
+    @app.post("/ecom-design/image", dependencies=secured)
+    async def ecom_design_image(payload: EcomImageRequest) -> dict[str, str]:
+        image_url = await tracked_ecom_request(payload.workflow_id, ecom_design_service().image(payload))
+        return {"image_url": image_url}
+
+    @app.post("/ecom-design/search", dependencies=secured)
+    async def ecom_design_search(payload: EcomSearchRequest) -> dict[str, Any]:
+        return await tracked_ecom_request(payload.workflow_id, ecom_design_service().search(payload))
+
+    @app.post("/ecom-design/cancel", dependencies=secured)
+    async def ecom_design_cancel(payload: EcomCancelRequest) -> dict[str, int]:
+        tasks = list(ecom_active_requests.pop(payload.workflow_id, set()))
+        current = asyncio.current_task()
+        cancelled = 0
+        for task in tasks:
+            if task is current or task.done():
+                continue
+            task.cancel()
+            cancelled += 1
+        logger.info("中止生成套图流程：workflow_id=%s requests=%d", payload.workflow_id, cancelled)
+        return {"cancelled": cancelled}
 
     @app.get("/assets/root", dependencies=secured, response_model=AssetRootOverview)
     async def asset_root_overview() -> AssetRootOverview:

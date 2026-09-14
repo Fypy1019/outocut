@@ -17,7 +17,9 @@ const previewPath = ref('')
 const settings = reactive<AppSettings>({
   output_directory: '', cache_directory: '', asset_root_directory: '', max_concurrent_jobs: 1,
   default_width: 1080, default_height: 1920, default_fps: 30, default_codec: 'libx264', default_quality: 23,
-  bailian_base_url: '', minimax_base_url: '', deepseek_base_url: 'https://api.deepseek.com', rewrite_provider: 'bailian', default_model: 'qwen-plus', default_voice_model: 'speech-2.8-hd', asr_provider: 'bailian', asr_model: 'paraformer-realtime-v2',
+  bailian_base_url: '', ecom_text_api_mode: 'chat-completions', ecom_text_base_url: '', ecom_text_model: '', ecom_text_timeout_seconds: 600,
+  ecom_image_api_mode: 'images', ecom_image_base_url: '', ecom_image_model: '', ecom_search_enabled: false,
+  minimax_base_url: '', deepseek_base_url: 'https://api.deepseek.com', rewrite_provider: 'bailian', default_model: 'qwen-plus', default_voice_model: 'speech-2.8-hd', asr_provider: 'bailian', asr_model: 'paraformer-realtime-v2',
   rewrite_instructions: '', configured: {},
 })
 let timer: number | undefined

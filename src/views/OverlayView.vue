@@ -50,13 +50,14 @@ let filePanelHeaderObserver: ResizeObserver | null = null
 let stopRequested = false
 let activeBatchId = ''
 let pollTimer: number | null = null
-const enabled = reactive({ watermark: true, sticker: false, pixel: false })
+const enabled = reactive({ watermark: true, sticker: false, pixel: false, videoOverlay: false, fixedFrameDrop: false })
 const stickerRandom = ref(false)
 const stickerRandomSource = ref(false)
 const stickerFolder = ref('')
 const watermark = reactive({ path: 'D:/watermark/watermark/布素朵水印.gif', opacity: 0.5 })
 const sticker = reactive({ path: 'D:/watermark/stickers/贴纸.png', opacity: 0.8, scale: 0.5 })
 const pixel = reactive({ path: 'D:/watermark/stickers/防搬运动态图.gif', opacity: 0.5 })
+const videoOverlay = reactive({ path: '', opacity: 0.5 })
 const stickerPositions = reactive<Record<OverlayPosition, boolean>>({
   top_left: false,
   top_right: false,
@@ -77,6 +78,7 @@ function restoreOverlaySettings() {
     Object.assign(watermark, saved.watermark || {})
     Object.assign(sticker, saved.sticker || {})
     Object.assign(pixel, saved.pixel || {})
+    Object.assign(videoOverlay, saved.videoOverlay || {})
     Object.assign(stickerPositions, saved.stickerPositions || {})
     stickerRandom.value = Boolean(saved.stickerRandom)
     stickerRandomSource.value = Boolean(saved.stickerRandomSource)
@@ -126,12 +128,13 @@ function restoreBatchState() {
 restoreOverlaySettings()
 restoreBatchState()
 watch(
-  [enabled, watermark, sticker, pixel, stickerPositions, stickerRandom, stickerRandomSource, stickerFolder, outputDirectory],
+  [enabled, watermark, sticker, pixel, videoOverlay, stickerPositions, stickerRandom, stickerRandomSource, stickerFolder, outputDirectory],
   () => localStorage.setItem('outocut-overlay-settings', JSON.stringify({
     enabled,
     watermark,
     sticker,
     pixel,
+    videoOverlay,
     stickerPositions,
     stickerRandom: stickerRandom.value,
     stickerRandomSource: stickerRandomSource.value,
@@ -167,6 +170,13 @@ async function chooseOverlay(target: 'watermark' | 'sticker' | 'pixel') {
   if (target === 'watermark') watermark.path = path
   else if (target === 'sticker') sticker.path = path
   else pixel.path = path
+}
+
+async function chooseVideoOverlay() {
+  const path = await window.outocut?.selectFile([
+    { name: '视频文件', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'flv', 'ts', 'mts', 'm2ts', 'wmv', 'mpg', 'mpeg', '3gp'] },
+  ])
+  if (path) videoOverlay.path = path
 }
 
 async function chooseOutputDirectory() {
@@ -254,7 +264,7 @@ async function startBatch() {
   }
   if (!videos.value.length) return ElMessage.warning('请先批量选择视频文件')
   if (!pendingCount.value) return ElMessage.warning('没有待转换的视频')
-  if (!enabled.watermark && !enabled.sticker && !enabled.pixel) return ElMessage.warning('请至少开启一种处理方式')
+  if (!enabled.watermark && !enabled.sticker && !enabled.pixel && !enabled.videoOverlay && !enabled.fixedFrameDrop) return ElMessage.warning('请至少开启一种处理方式')
   if (enabled.watermark && !watermark.path) return ElMessage.warning('请选择水印 GIF 图')
   let stickerFiles: string[] = []
   if (enabled.sticker && stickerRandomSource.value) {
@@ -265,6 +275,7 @@ async function startBatch() {
     return ElMessage.warning('请选择贴纸图片')
   }
   if (enabled.pixel && !pixel.path) return ElMessage.warning('请选择像素点 GIF 图')
+  if (enabled.videoOverlay && !videoOverlay.path) return ElMessage.warning('请选择要贴入的视频')
   const selectedPositions = (Object.entries(stickerPositions) as Array<[OverlayPosition, boolean]>)
     .filter(([, selected]) => selected)
     .map(([position]) => position)
@@ -301,6 +312,8 @@ async function startBatch() {
         watermark: enabled.watermark ? { path: watermark.path, opacity: watermark.opacity } : null,
         sticker: enabled.sticker ? { path: stickerPath, opacity: sticker.opacity, scale: sticker.scale, positions } : null,
         pixel: enabled.pixel ? { path: pixel.path, opacity: pixel.opacity } : null,
+        video_overlay: enabled.videoOverlay ? { path: videoOverlay.path, opacity: videoOverlay.opacity } : null,
+        fixed_frame_drop: enabled.fixedFrameDrop,
       })
   }
   applyBatch(await post<MediaBatch>('/media-batches/overlays', { items }))
@@ -339,7 +352,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="overlay-page">
-    <div class="asset-tip">批量选择本地视频，通过 FFmpeg 叠加全屏 GIF 水印、静态贴纸或像素点 GIF。所有处理均在本机完成，原视频不会被修改。</div>
+    <div class="asset-tip">批量选择本地视频，通过 FFmpeg 叠加水印、贴纸、像素点 GIF 或视频，也可固定去帧。所有处理均在本机完成，原视频不会被修改。</div>
 
     <section class="panel overlay-upload-panel">
       <div class="panel-header">
@@ -351,7 +364,15 @@ onBeforeUnmount(() => {
 
     <div class="overlay-workspace">
       <section ref="configPanel" class="panel overlay-config-panel">
-        <div class="panel-header"><div><h2>处理方式</h2><p>三种处理可单独开启，也可组合后统一输出</p></div></div>
+        <div class="panel-header"><div><h2>处理方式</h2><p>五种处理可单独开启，也可组合后统一输出</p></div></div>
+
+        <section class="overlay-layer-card" :class="{ enabled: enabled.videoOverlay }">
+          <header><div><strong>贴视频</strong><span>拉伸至素材宽高，静音循环覆盖至结束</span></div><el-switch v-model="enabled.videoOverlay" /></header>
+          <div class="overlay-layer-settings" :class="{ disabled: !enabled.videoOverlay }">
+            <label>覆盖视频</label><div class="path-field"><el-input v-model="videoOverlay.path" readonly placeholder="选择要覆盖的视频" /><el-button type="primary" plain :disabled="!enabled.videoOverlay" @click="chooseVideoOverlay">选择视频</el-button></div>
+            <label>透明度</label><div class="overlay-slider-row"><el-slider v-model="videoOverlay.opacity" :disabled="!enabled.videoOverlay" :min="0.01" :max="1" :step="0.01" :show-tooltip="false" /><span>{{ Math.round(videoOverlay.opacity * 100) }}%</span></div>
+          </div>
+        </section>
 
         <section class="overlay-layer-card" :class="{ enabled: enabled.watermark }">
           <header><div><strong>批量打水印</strong><span>全屏 GIF 循环覆盖至视频结束</span></div><el-switch v-model="enabled.watermark" /></header>
@@ -388,6 +409,13 @@ onBeforeUnmount(() => {
           <div class="overlay-layer-settings" :class="{ disabled: !enabled.pixel }">
             <label>GIF 图像</label><div class="path-field"><el-input v-model="pixel.path" readonly placeholder="选择像素点 GIF" /><el-button type="primary" plain :disabled="!enabled.pixel" @click="chooseOverlay('pixel')">选择图像</el-button></div>
             <label>透明度</label><div class="overlay-slider-row"><el-slider v-model="pixel.opacity" :disabled="!enabled.pixel" :min="0.05" :max="1" :step="0.05" :show-tooltip="false" /><span>{{ Math.round(pixel.opacity * 100) }}%</span></div>
+          </div>
+        </section>
+
+        <section class="overlay-layer-card" :class="{ enabled: enabled.fixedFrameDrop }">
+          <header><div><strong>固定去帧</strong><span>在视频三分之一和三分之二处各删除一帧</span></div><el-switch v-model="enabled.fixedFrameDrop" /></header>
+          <div class="overlay-layer-settings" :class="{ disabled: !enabled.fixedFrameDrop }">
+            <label>处理规则</label><span>同步缩短对应音频，保持音画对齐</span>
           </div>
         </section>
 

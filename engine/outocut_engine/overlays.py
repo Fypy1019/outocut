@@ -13,6 +13,7 @@ from .models import (
     OverlayCompositeRequest,
     OverlayRenderRequest,
     StickerOverlaySettings,
+    VideoOverlaySettings,
 )
 from .processes import WINDOWS_FFMPEG_FLAGS, WINDOWS_NO_WINDOW
 from .video_pipeline import (
@@ -162,6 +163,41 @@ class OverlayProcessor:
         except (KeyError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise OverlayProcessingError("无法读取视频分辨率") from exc
 
+    def _probe_frame_timing(self, video: Path) -> tuple[int, float]:
+        result = subprocess.run(
+            [
+                self.settings.ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames,avg_frame_rate,r_frame_rate",
+                "-of",
+                "json",
+                str(video),
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=WINDOWS_NO_WINDOW,
+            check=False,
+        )
+        try:
+            stream = json.loads(result.stdout)["streams"][0]
+            frame_count = int(stream["nb_read_frames"])
+            rate = stream.get("avg_frame_rate") or stream.get("r_frame_rate")
+            numerator, denominator = (int(part) for part in rate.split("/", 1))
+            fps = numerator / denominator
+            if frame_count < 3 or fps <= 0:
+                raise ValueError
+            return frame_count, fps
+        except (IndexError, KeyError, TypeError, ValueError, ZeroDivisionError, json.JSONDecodeError) as exc:
+            raise OverlayProcessingError("固定去帧需要至少 3 帧且帧率可识别的视频") from exc
+
     def render(self, request: OverlayRenderRequest) -> dict[str, str]:
         if request.mode == "watermark":
             composite = OverlayCompositeRequest(
@@ -203,6 +239,8 @@ class OverlayProcessor:
             layers.append(("贴纸", Path(request.sticker.path).expanduser().resolve()))
         if request.pixel:
             layers.append(("像素点", Path(request.pixel.path).expanduser().resolve()))
+        if request.video_overlay:
+            layers.append(("贴视频", Path(request.video_overlay.path).expanduser().resolve()))
         for name, path in layers:
             if not path.is_file():
                 raise OverlayProcessingError(f"{name}图像不存在：{path}")
@@ -219,7 +257,10 @@ class OverlayProcessor:
                 raise OverlayProcessingError("批量贴纸需要选择静态图片")
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        suffix = "-".join(name for name, _path in layers)
+        actions = [name for name, _path in layers]
+        if request.fixed_frame_drop:
+            actions.append("固定去帧")
+        suffix = "-".join(actions)
         output = output_dir / f"{video.stem}-{suffix}.mp4"
         sequence = 2
         while output.exists():
@@ -232,9 +273,41 @@ class OverlayProcessor:
         codec = "h264_nvenc" if self.preferred_codec == "h264_nvenc" and self.nvenc_available else "libx264"
 
         input_args: list[str] = []
-        filters = [
-            f"[0:v]setpts=PTS-STARTPTS,{normalized_video_filter(f'scale={width}:{height}', hdr)}[v0]"
-        ]
+        base_filter = normalized_video_filter(f"scale={width}:{height}", hdr)
+        filters: list[str] = []
+        filtered_audio_label: str | None = None
+        if request.fixed_frame_drop:
+            frame_count, fps = self._probe_frame_timing(video)
+            first_frame = frame_count // 3
+            second_frame = (frame_count * 2) // 3
+            first_start = first_frame / fps
+            first_end = (first_frame + 1) / fps
+            second_start = second_frame / fps
+            second_end = (second_frame + 1) / fps
+            filters.extend(
+                [
+                    f"[0:v]{base_filter},split=3[dropv0][dropv1][dropv2]",
+                    f"[dropv0]trim=end_frame={first_frame},setpts=PTS-STARTPTS[dropv0out]",
+                    f"[dropv1]trim=start_frame={first_frame + 1}:end_frame={second_frame},"
+                    "setpts=PTS-STARTPTS[dropv1out]",
+                    f"[dropv2]trim=start_frame={second_frame + 1},setpts=PTS-STARTPTS[dropv2out]",
+                    "[dropv0out][dropv1out][dropv2out]concat=n=3:v=1:a=0[v0]",
+                ]
+            )
+            if audio_index is not None:
+                filters.extend(
+                    [
+                        f"[0:{audio_index}]asplit=3[dropa0][dropa1][dropa2]",
+                        f"[dropa0]atrim=end={first_start:.9f},asetpts=PTS-STARTPTS[dropa0out]",
+                        f"[dropa1]atrim=start={first_end:.9f}:end={second_start:.9f},"
+                        "asetpts=PTS-STARTPTS[dropa1out]",
+                        f"[dropa2]atrim=start={second_end:.9f},asetpts=PTS-STARTPTS[dropa2out]",
+                        "[dropa0out][dropa1out][dropa2out]concat=n=3:v=0:a=1[aout]",
+                    ]
+                )
+                filtered_audio_label = "[aout]"
+        else:
+            filters.append(f"[0:v]setpts=PTS-STARTPTS,{base_filter}[v0]")
         input_index = 1
         stage = 0
 
@@ -250,6 +323,22 @@ class OverlayProcessor:
             )
             input_index += 1
             stage += 1
+
+        def add_video_overlay(settings: VideoOverlaySettings) -> None:
+            nonlocal input_index, stage
+            input_args.extend(["-stream_loop", "-1", "-i", str(Path(settings.path).resolve())])
+            filters.append(
+                f"[{input_index}:v]scale={width}:{height},setsar=1,format=rgba,"
+                f"colorchannelmixer=aa={settings.opacity:.3f},setpts=PTS-STARTPTS[layer{stage}]"
+            )
+            filters.append(
+                f"[v{stage}][layer{stage}]overlay=0:0:shortest=1,format=yuv420p[v{stage + 1}]"
+            )
+            input_index += 1
+            stage += 1
+
+        if request.video_overlay:
+            add_video_overlay(request.video_overlay)
 
         if request.watermark:
             add_full_frame(request.watermark)
@@ -282,11 +371,16 @@ class OverlayProcessor:
         if request.pixel:
             add_full_frame(request.pixel)
 
-        audio_args = (
-            ["-map", f"0:{audio_index}", "-c:a", "aac", "-b:a", "192k"]
-            if audio_index is not None
-            else []
-        )
+        audio_args = []
+        if audio_index is not None:
+            audio_args = [
+                "-map",
+                filtered_audio_label or f"0:{audio_index}",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ]
         def command(selected_codec: str) -> list[str]:
             return [
                 self.settings.ffmpeg,

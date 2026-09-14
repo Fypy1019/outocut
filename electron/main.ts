@@ -5,6 +5,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { QianchuanUploader } from './qianchuan.js'
+import { CompetitorBrowser } from './competitor-browser.js'
 
 let mainWindow: BrowserWindow | null = null
 let engine: ChildProcessWithoutNullStreams | null = null
@@ -12,6 +14,8 @@ let enginePort = 0
 let engineToken = ''
 let engineReady = false
 let workspaceRoot = ''
+let qianchuanUploader: QianchuanUploader | null = null
+let competitorBrowser: CompetitorBrowser | null = null
 const recentLogs: string[] = []
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -137,9 +141,9 @@ function appendLog(source: string, chunk: Buffer): void {
   const timestamp = new Date().toISOString()
   const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean)
   for (const line of lines) {
-    recentLogs.push(`[${source}] ${line}`)
+    recentLogs.push(`${timestamp} [${source}] ${line}`)
   }
-  if (recentLogs.length > 300) recentLogs.splice(0, recentLogs.length - 300)
+  if (recentLogs.length > 1000) recentLogs.splice(0, recentLogs.length - 1000)
   try {
     const logDir = join(app.getPath('userData'), 'logs')
     mkdirSync(logDir, { recursive: true })
@@ -326,6 +330,10 @@ ipcMain.handle('dialog:selectDirectory', async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'createDirectory'] })
   return result.canceled ? null : result.filePaths[0]
 })
+ipcMain.handle('dialog:selectDirectories', async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory', 'multiSelections'] })
+  return result.canceled ? [] : result.filePaths
+})
 ipcMain.handle('dialog:selectFile', async (_event, filters?: Electron.FileFilter[]) => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'], filters })
   return result.canceled ? null : result.filePaths[0]
@@ -336,6 +344,67 @@ ipcMain.handle('dialog:selectFiles', async (_event, filters?: Electron.FileFilte
     filters,
   })
   return result.canceled ? [] : result.filePaths
+})
+ipcMain.handle('image:saveGenerated', async (_event, request: {
+  source: string
+  suggestedName: string
+  outputDirectory?: string
+  relativeDirectory?: string
+}) => {
+  const source = String(request?.source || '')
+  if (!source || source.length > 140_000_000) throw new Error('图片数据为空或超过 100MB 限制')
+
+  let bytes: Buffer
+  let mimeType = ''
+  const dataMatch = source.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=\r\n]+)$/i)
+  if (dataMatch) {
+    mimeType = dataMatch[1].toLowerCase()
+    bytes = Buffer.from(dataMatch[2], 'base64')
+  } else {
+    const imageUrl = new URL(source)
+    if (!['http:', 'https:'].includes(imageUrl.protocol)) throw new Error('不支持的图片地址')
+    const response = await net.fetch(imageUrl.href)
+    if (!response.ok) throw new Error(`下载图片失败（HTTP ${response.status}）`)
+    mimeType = String(response.headers.get('content-type') || '').split(';')[0].toLowerCase()
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {
+      throw new Error(`供应商返回的不是受支持的图片格式：${mimeType || '未知格式'}`)
+    }
+    bytes = Buffer.from(await response.arrayBuffer())
+  }
+  if (!bytes.length || bytes.length > 100 * 1024 * 1024) throw new Error('图片数据为空或超过 100MB 限制')
+
+  const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.split('/')[1]
+  const rawName = String(request?.suggestedName || '生成图片')
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .replace(/\.(?:png|jpe?g|webp)$/i, '')
+  const fileName = `${rawName || '生成图片'}.${extension}`
+  const requestedDirectory = String(request?.outputDirectory || '').trim()
+  if (requestedDirectory) {
+    const outputRoot = resolve(requestedDirectory)
+    if (!existsSync(outputRoot) || !lstatSync(outputRoot).isDirectory()) throw new Error('自动下载路径不存在或不是文件夹')
+    const allowedSubdirectories = new Set(['主图', 'SKU图', '详情页图'])
+    const relativeDirectory = String(request?.relativeDirectory || '')
+    const outputDirectory = allowedSubdirectories.has(relativeDirectory)
+      ? join(outputRoot, relativeDirectory)
+      : outputRoot
+    mkdirSync(outputDirectory, { recursive: true })
+    let targetPath = join(outputDirectory, fileName)
+    let copyIndex = 2
+    while (existsSync(targetPath)) {
+      targetPath = join(outputDirectory, `${rawName || '生成图片'} (${copyIndex}).${extension}`)
+      copyIndex += 1
+    }
+    writeFileSync(targetPath, bytes)
+    return { saved: true, path: targetPath }
+  }
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    defaultPath: join(app.getPath('pictures'), fileName),
+    filters: [{ name: '图片', extensions: [extension] }],
+  })
+  if (result.canceled || !result.filePath) return { saved: false }
+  writeFileSync(result.filePath, bytes)
+  return { saved: true, path: result.filePath }
 })
 const MUSIC_SUFFIXES = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'])
 
@@ -387,6 +456,56 @@ ipcMain.handle('font:readBytes', async (_event, path: string) => {
   }
 })
 
+function requireQianchuanUploader(): QianchuanUploader {
+  if (!qianchuanUploader) throw new Error('千川上传模块尚未就绪')
+  return qianchuanUploader
+}
+
+ipcMain.handle('qianchuan:status', () => requireQianchuanUploader().getStatus())
+ipcMain.handle('qianchuan:scanDirectory', (_event, directory: string) => (
+  requireQianchuanUploader().scanDirectory(directory)
+))
+ipcMain.handle('qianchuan:configure', (_event, config: { batchSize?: number; batchTimeoutSeconds?: number; maxConcurrentEntrances?: number; sharedEntrances?: boolean }) => (
+  requireQianchuanUploader().configure(config)
+))
+ipcMain.handle('qianchuan:openChrome', () => requireQianchuanUploader().openChrome())
+ipcMain.handle('qianchuan:discoverEntrances', () => requireQianchuanUploader().discoverEntrances())
+ipcMain.handle('qianchuan:assignEntranceDirectory', (_event, entranceId: string, directory: string) => (
+  requireQianchuanUploader().assignEntranceDirectory(entranceId, directory)
+))
+ipcMain.handle('qianchuan:assignEntranceDirectories', (_event, entranceId: string, directories: string[]) => (
+  requireQianchuanUploader().assignEntranceDirectories(entranceId, directories)
+))
+ipcMain.handle('qianchuan:assignSharedDirectories', (_event, directories: string[]) => (
+  requireQianchuanUploader().assignSharedDirectories(directories)
+))
+ipcMain.handle('qianchuan:renameEntrance', (_event, entranceId: string, name: string) => (
+  requireQianchuanUploader().renameEntrance(entranceId, name)
+))
+ipcMain.handle('qianchuan:focusEntrance', (_event, entranceId: string) => (
+  requireQianchuanUploader().focusEntrance(entranceId)
+))
+ipcMain.handle('qianchuan:start', () => requireQianchuanUploader().start())
+ipcMain.handle('qianchuan:startEntrance', (_event, entranceId: string) => (
+  requireQianchuanUploader().startEntrance(entranceId)
+))
+ipcMain.handle('qianchuan:pause', () => requireQianchuanUploader().pause())
+ipcMain.handle('qianchuan:resume', () => requireQianchuanUploader().resume())
+ipcMain.handle('qianchuan:stop', () => requireQianchuanUploader().stop())
+ipcMain.handle('qianchuan:retryFailed', () => requireQianchuanUploader().retryFailed())
+ipcMain.handle('qianchuan:confirmSucceeded', (_event, fileIds: string[]) => (
+  requireQianchuanUploader().confirmSucceeded(fileIds)
+))
+
+function requireCompetitorBrowser(): CompetitorBrowser {
+  if (!competitorBrowser) competitorBrowser = new CompetitorBrowser()
+  return competitorBrowser
+}
+
+ipcMain.handle('competitor:open', (_event, url: string) => requireCompetitorBrowser().open(url))
+ipcMain.handle('competitor:status', () => requireCompetitorBrowser().status())
+ipcMain.handle('competitor:collect', (_event, url?: string) => requireCompetitorBrowser().collect(url))
+
 app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   Menu.setApplicationMenu(null)
@@ -396,6 +515,11 @@ app.whenReady().then(async () => {
       return new Response('Media file not found', { status: 404 })
     }
     return net.fetch(pathToFileURL(localPath).href, { headers: request.headers })
+  })
+  qianchuanUploader = new QianchuanUploader((snapshot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('qianchuan:statusChanged', snapshot)
+  }, (level, message) => {
+    appendLog(`qianchuan:${level}`, Buffer.from(message))
   })
   workspaceRoot = loadWorkspaceRoot()
   try {
@@ -411,5 +535,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  void qianchuanUploader?.close()
+  void competitorBrowser?.close()
   if (engine && !engine.killed) engine.kill()
 })
