@@ -43,6 +43,7 @@ Python 测试会用 FFmpeg 生成临时视频并完成一次真实的端到端�
 ## Windows 打包
 
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\build-engine.ps1
 .\scripts\copy-ffmpeg.ps1
 pnpm run package:win
